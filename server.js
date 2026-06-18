@@ -243,6 +243,62 @@ const NAVER_FUND_HEADERS = {
   "Accept": "application/json",
 };
 
+// 시드 코드 주변의 같은 펀드 패밀리 클래스 찾기 (Naver AC 10개 한도 우회)
+app.get("/api/fund/expand-classes", async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.json([]);
+  try {
+    // 1. 시드 코드 정보 조회
+    const seedRes = await axios.get("https://m.stock.naver.com/front-api/fund/detail", {
+      params: { fundCode: code },
+      headers: NAVER_FUND_HEADERS,
+      timeout: 5000,
+    });
+    const seedName = seedRes.data?.result?.fundName;
+    if (!seedName) return res.json([]);
+
+    // 2. 기본 이름 추출 (Class·_운용 이전까지)
+    const namePrefix = seedName.split(/Class|_운용/)[0].slice(0, Math.min(20, seedName.length));
+
+    // 3. 코드 분해 (예: K55307D05134 → prefix=K55307D, num=05134)
+    const m = code.match(/^([A-Z0-9]+?)(\d{5})$/);
+    if (!m) return res.json([]);
+    const [, codePrefix, numStr] = m;
+    const baseNum = parseInt(numStr);
+
+    // 4. 인접 코드 스캔 (-50 ~ +200, 병렬 배치)
+    const codes = [];
+    for (let i = Math.max(0, baseNum - 50); i <= baseNum + 200; i++) {
+      if (i === baseNum) continue;
+      codes.push(codePrefix + i.toString().padStart(5, "0"));
+    }
+
+    const found = [];
+    const BATCH = 30;
+    for (let i = 0; i < codes.length; i += BATCH) {
+      const batch = codes.slice(i, i + BATCH);
+      const results = await Promise.allSettled(
+        batch.map(c => axios.get("https://m.stock.naver.com/front-api/fund/detail", {
+          params: { fundCode: c },
+          headers: NAVER_FUND_HEADERS,
+          timeout: 4000,
+        }))
+      );
+      results.forEach((r, idx) => {
+        const name = r.status === "fulfilled" ? r.value?.data?.result?.fundName : null;
+        if (name && name.startsWith(namePrefix)) {
+          found.push({ code: batch[idx], name, type: "FUND", exchange: "펀드", country: "KR" });
+        }
+      });
+    }
+
+    res.json(found);
+  } catch (err) {
+    console.error("펀드 클래스 확장 실패:", err.message);
+    res.json([]);
+  }
+});
+
 // 펀드 검색 (네이버 자동완성 API + 코드 직접 조회)
 app.get("/api/fund/search", async (req, res) => {
   const { q } = req.query;

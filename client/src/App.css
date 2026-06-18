@@ -270,6 +270,9 @@ body { background: var(--bg); color: var(--text); font-family: "Segoe UI", syste
 .btn-add-stock { background: var(--accent); color: white; border: none; padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
 .btn-add-stock:hover:not(:disabled) { background: var(--accent2); }
 .btn-add-stock.already-added { background: var(--bg3); color: var(--green); border: 1px solid var(--green); cursor: default; }
+.btn-expand-classes { width: 100%; margin-top: 12px; padding: 12px; background: var(--bg3); border: 1px dashed var(--border); border-radius: 10px; color: var(--text2); cursor: pointer; font-size: 13px; font-weight: 600; }
+.btn-expand-classes:hover:not(:disabled) { background: var(--border); color: var(--text); }
+.btn-expand-classes:disabled { opacity: 0.6; cursor: default; }
 
 .pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 12px 24px; border-top: 1px solid var(--border); }
 .page-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; }

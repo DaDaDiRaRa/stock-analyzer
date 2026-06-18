@@ -25,6 +25,7 @@ export default function StockSearch({ onAdd, onClose, existingSymbols, apiBase }
   const [results, setResults]   = useState([]);
   const [fundResults, setFundResults] = useState([]);
   const [loading, setLoading]   = useState(false);
+  const [expanding, setExpanding] = useState(false);
   const [dbStatus, setDbStatus] = useState(null);
   const [pagination, setPagination] = useState({ total: 0, page: 0, pages: 1 });
   const inputRef    = useRef(null);
@@ -59,6 +60,26 @@ export default function StockSearch({ onAdd, onClose, existingSymbols, apiBase }
     } catch { setFundResults([]); }
     setLoading(false);
   }, [apiBase]);
+
+  // 펀드 클래스 자동 확장 (인접 코드 스캔)
+  const expandClasses = useCallback(async () => {
+    if (fundResults.length === 0) return;
+    // 가장 높은 번호의 코드를 시드로 사용
+    const seed = [...fundResults].sort((a, b) => b.code.localeCompare(a.code))[0];
+    setExpanding(true);
+    try {
+      const res = await axios.get(`${apiBase}/fund/expand-classes?code=${seed.code}`);
+      const existing = new Set(fundResults.map(f => f.code));
+      const merged = [...fundResults];
+      (res.data || []).forEach(f => {
+        if (!existing.has(f.code)) merged.push(f);
+      });
+      setFundResults(merged);
+    } catch (e) {
+      console.error("클래스 확장 실패:", e);
+    }
+    setExpanding(false);
+  }, [fundResults, apiBase]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -227,6 +248,11 @@ export default function StockSearch({ onAdd, onClose, existingSymbols, apiBase }
                 </div>
               );
             })}
+            {fundResults.length >= 10 && (
+              <button className="btn-expand-classes" onClick={expandClasses} disabled={expanding}>
+                {expanding ? "⏳ 인접 코드 스캔 중... (5~10초)" : "🔍 같은 펀드의 다른 클래스 찾기 (C-W, S-P 등)"}
+              </button>
+            )}
           </div>
         )}
 
