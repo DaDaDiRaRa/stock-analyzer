@@ -1,0 +1,33 @@
+# 환경변수 (절대 커밋 금지)
+.env
+.env.local
+.env.*.local
+
+# 의존성
+node_modules/
+client/node_modules/
+
+# 빌드 결과물
+client/dist/
+client/dist-ssr/
+
+# 로그
+*.log
+*.err
+logs/
+
+# 로컬 테스트 파일
+test_*.js
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+
+# Claude Code
+.claude/
+
+# Windows 실행 스크립트 (로컬 전용)
+start.bat
