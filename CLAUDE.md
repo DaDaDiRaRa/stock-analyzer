@@ -59,6 +59,10 @@ main 브랜치 push 시 GitHub Actions가 자동으로 GCP Cloud Run에 배포.
 | `NAVER_CLIENT_ID` | 네이버 오픈API (뉴스 검색) |
 | `NAVER_CLIENT_SECRET` | 네이버 오픈API |
 | `PORT` | 서버 포트 (기본 3001, Cloud Run은 8080 자동 주입) |
+| `FINNHUB_API_KEY` | Finnhub (미국 주식/ETF 뉴스) |
+| `ALPHA_VANTAGE_API_KEY` | Alpha Vantage (뉴스 감성 분석) |
+| `DART_API_KEY` | DART 전자공시 (한국 기업 공시) |
+| `NEWS_API_KEY` | NewsAPI.org (한국어 글로벌 뉴스) |
 
 ## 주요 API 엔드포인트
 
@@ -72,10 +76,14 @@ main 브랜치 push 시 GitHub Actions가 자동으로 GCP Cloud Run에 배포.
 
 ## 데이터 소스
 
-- **미국 주식/ETF**: Yahoo Finance (`yahoo-finance2`)
-- **한국 주식**: 네이버 금융 스크래핑 (euc-kr 인코딩 → iconv-lite 변환)
-- **펀드**: 네이버 증권 API
-- **AI 분석**: Anthropic Claude API (`@anthropic-ai/sdk`)
+| 종목 유형 | 시세 | AI 분석용 데이터 |
+|-----------|------|-----------------|
+| 미국 주식/ETF | Yahoo Finance (`yahoo-finance2`) | Finnhub 뉴스 (14일) + Alpha Vantage 감성 분석 배치 |
+| 한국 주식 | 네이버 금융 스크래핑 (euc-kr → iconv-lite) | DART 전자공시 (30일) + NewsAPI.org (ko) |
+| 펀드 | 네이버 증권 API | 네이버 펀드 편입종목 look-through + 네이버 뉴스 |
+
+- **AI 분석 모델**: `claude-sonnet-4-6` — 3M/6M 시나리오 예측 (강세/기본/약세)
+- Alpha Vantage는 모든 미국 종목을 한 번의 API 호출로 배치 처리 (쿼터 절약)
 
 ## 포트폴리오 상태
 
@@ -92,3 +100,19 @@ GCP 배포를 위해 레포 Settings → Secrets에 필요:
 - `ANTHROPIC_API_KEY`
 - `NAVER_CLIENT_ID`
 - `NAVER_CLIENT_SECRET`
+- `FINNHUB_API_KEY`
+- `ALPHA_VANTAGE_API_KEY`
+- `DART_API_KEY`
+- `NEWS_API_KEY`
+
+## GCP 인프라
+
+- **리전**: `asia-northeast3` (서울)
+- **Artifact Registry 레포**: `stock-analyzer` (Docker 형식)
+  - 이미지 경로: `asia-northeast3-docker.pkg.dev/{PROJECT_ID}/stock-analyzer/stock-analyzer`
+  - 최초 배포 전 GCP 콘솔에서 수동 생성 필요
+- **서비스 계정 필요 역할**:
+  - Artifact Registry 관리자
+  - Cloud Run 배포자
+  - 서비스 계정 사용자
+  - 스토리지 관리자
