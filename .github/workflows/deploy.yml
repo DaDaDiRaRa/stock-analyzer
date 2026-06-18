@@ -58,6 +58,8 @@ jobs:
             ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
             DART_API_KEY=${{ secrets.DART_API_KEY }}
             NEWS_API_KEY=${{ secrets.NEWS_API_KEY }}
+            GOOGLE_SHEET_ID=${{ secrets.GOOGLE_SHEET_ID }}
+            GOOGLE_SERVICE_ACCOUNT_KEY=${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
           flags: >-
             --allow-unauthenticated
             --memory=512Mi

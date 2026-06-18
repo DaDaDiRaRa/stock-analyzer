@@ -31,6 +31,9 @@ body { background: var(--bg); color: var(--text); font-family: "Segoe UI", syste
 .btn-refresh:hover { background: var(--border); }
 .btn-add { background: var(--accent); color: white; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; }
 .btn-add:hover { background: var(--accent2); }
+.btn-sheets { background: var(--bg3); border: 1px solid #34a853; color: #34a853; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.btn-sheets:hover:not(:disabled) { background: rgba(52,168,83,0.15); }
+.btn-sheets:disabled { opacity: 0.6; cursor: default; }
 
 .nav { display: flex; gap: 4px; padding: 12px 24px; background: var(--bg2); border-bottom: 1px solid var(--border); }
 .nav-tab { background: none; border: 1px solid transparent; color: var(--text2); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; }

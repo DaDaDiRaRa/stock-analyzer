@@ -19,6 +19,8 @@ export default function App() {
   const [marketData, setMarketData] = useState([]);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [sheetsConfigured, setSheetsConfigured] = useState(false);
+  const [sheetsSyncing, setSheetsSyncing] = useState(false);
 
   const refreshQuotes = useCallback(async () => {
     if (portfolio.length === 0) return;
@@ -75,9 +77,39 @@ export default function App() {
     }
   }, []);
 
+  // Google Sheets에서 포트폴리오 불러오기
+  const loadFromSheets = useCallback(async (silent = false) => {
+    if (!silent) setSheetsSyncing(true);
+    try {
+      const res = await axios.get(`${API}/sheets/load`);
+      if (res.data.configured) {
+        setSheetsConfigured(true);
+        if (res.data.portfolio?.length > 0) {
+          setPortfolio(res.data.portfolio);
+        }
+      }
+    } catch (e) {
+      console.error('Sheets 로드 실패:', e);
+    } finally {
+      if (!silent) setSheetsSyncing(false);
+    }
+  }, []);
+
   useEffect(() => {
     localStorage.setItem('portfolio', JSON.stringify(portfolio));
   }, [portfolio]);
+
+  // 앱 최초 로드 시 Sheets에서 불러오기
+  useEffect(() => { loadFromSheets(true); }, [loadFromSheets]);
+
+  // 시세 갱신 후 Sheets에 자동 저장
+  useEffect(() => {
+    if (!sheetsConfigured || Object.keys(quotes).length === 0 || portfolio.length === 0) return;
+    const enriched = portfolio.map(p => ({
+      ...p, ...(quotes[p.symbol] || {}), currentPrice: quotes[p.symbol]?.price || 0,
+    }));
+    axios.post(`${API}/sheets/save`, { portfolio: enriched }).catch(console.error);
+  }, [quotes, sheetsConfigured]);
 
   useEffect(() => {
     refreshQuotes();
@@ -135,6 +167,16 @@ export default function App() {
             <span className="last-updated">
               업데이트: {lastUpdated.toLocaleTimeString('ko-KR')}
             </span>
+          )}
+          {sheetsConfigured && (
+            <button
+              className="btn-sheets"
+              onClick={() => loadFromSheets(false).then(refreshQuotes)}
+              disabled={sheetsSyncing}
+              title="Google Sheets에서 포트폴리오 불러오기"
+            >
+              {sheetsSyncing ? '⏳' : '📊'} Sheets
+            </button>
           )}
           <button className="btn-refresh" onClick={() => { refreshQuotes(); refreshMarket(); }}>
             🔄

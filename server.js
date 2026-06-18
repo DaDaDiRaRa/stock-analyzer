@@ -6,6 +6,7 @@ const axios = require("axios");
 const iconv = require("iconv-lite");
 const YahooFinance = require("yahoo-finance2").default;
 const Anthropic = require("@anthropic-ai/sdk");
+const { google } = require("googleapis");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -733,6 +734,127 @@ ${mText}
     res.json({ analysis: msg.content[0].text, newsMap });
   } catch (err) {
     res.status(500).json({ error: "AI 분석 실패: " + err.message });
+  }
+});
+
+// ====== Google Sheets 연동 ======
+
+const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const SHEET = { KR: "한국주식", US: "미국주식_ETF", FUND: "ISA펀드", SUMMARY: "요약" };
+
+function getSheetsClient() {
+  try {
+    const credB64 = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+    const auth = new google.auth.GoogleAuth({
+      credentials: credB64 ? JSON.parse(Buffer.from(credB64, "base64").toString()) : undefined,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+    });
+    return google.sheets({ version: "v4", auth });
+  } catch (e) {
+    console.error("Sheets 인증 오류:", e.message);
+    return null;
+  }
+}
+
+// 포트폴리오 불러오기 (종목코드·이름·수량·평균가만)
+app.get("/api/sheets/load", async (req, res) => {
+  if (!SHEET_ID) return res.json({ portfolio: [], configured: false });
+  const sheets = getSheetsClient();
+  if (!sheets) return res.json({ portfolio: [], configured: false });
+
+  try {
+    const portfolio = [];
+    const parseNum = s => parseFloat((s || "0").replace(/,/g, "")) || 0;
+
+    // 한국주식: A=종목코드, B=종목명, C=보유수량, D=평균매입가
+    const krRes = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET.KR}!A2:D` });
+    for (const row of (krRes.data.values || [])) {
+      if (!row[0]) continue;
+      portfolio.push({ symbol: row[0].trim(), name: row[1] || "", country: "KR", type: "EQUITY", exchange: "KOSPI/KOSDAQ", quantity: parseNum(row[2]), avgPrice: parseNum(row[3]) });
+    }
+
+    // 미국주식_ETF: A=티커, B=종목명, C=종류(EQUITY/ETF), D=보유수량, E=평균매입가
+    const usRes = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET.US}!A2:E` });
+    for (const row of (usRes.data.values || [])) {
+      if (!row[0]) continue;
+      const t = row[2] || "EQUITY";
+      portfolio.push({ symbol: row[0].trim(), name: row[1] || "", country: "US", type: t, exchange: t === "ETF" ? "ETF" : "NYSE/NASDAQ", quantity: parseNum(row[3]), avgPrice: parseNum(row[4]) });
+    }
+
+    // ISA펀드: A=펀드코드, B=펀드명, C=보유좌수, D=평균매입가
+    const fundRes = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${SHEET.FUND}!A2:D` });
+    for (const row of (fundRes.data.values || [])) {
+      if (!row[0]) continue;
+      portfolio.push({ symbol: row[0].trim(), name: row[1] || "", country: "KR", type: "FUND", exchange: "펀드", quantity: parseNum(row[2]), avgPrice: parseNum(row[3]) });
+    }
+
+    res.json({ portfolio, configured: true });
+  } catch (e) {
+    console.error("Sheets load error:", e.message);
+    res.status(500).json({ error: e.message, portfolio: [], configured: true });
+  }
+});
+
+// 포트폴리오 저장 (현재가·계산값 포함 전체 갱신)
+app.post("/api/sheets/save", async (req, res) => {
+  if (!SHEET_ID) return res.json({ ok: false, error: "GOOGLE_SHEET_ID 미설정" });
+  const sheets = getSheetsClient();
+  if (!sheets) return res.json({ ok: false, error: "인증 실패" });
+
+  const { portfolio } = req.body;
+  if (!portfolio?.length) return res.json({ ok: true });
+
+  const krItems   = portfolio.filter(p => p.country === "KR" && p.type !== "FUND");
+  const usItems   = portfolio.filter(p => p.country === "US");
+  const fundItems = portfolio.filter(p => p.type === "FUND");
+
+  const krTotal   = krItems.reduce((s, p) => s + (p.currentPrice||0)*(p.quantity||0), 0);
+  const usTotal   = usItems.reduce((s, p) => s + (p.currentPrice||0)*(p.quantity||0), 0);
+  const fundTotal = fundItems.reduce((s, p) => s + (p.currentPrice||0)*(p.quantity||0), 0);
+  const krBase    = krTotal + fundTotal;
+
+  const pct = (v, t) => t > 0 ? (v/t*100).toFixed(2) : "0.00";
+  const n   = v => (v != null && !isNaN(v)) ? v : "";
+
+  const makeRow = (p, isUsd) => {
+    const val  = (p.currentPrice||0)*(p.quantity||0);
+    const cost = (p.avgPrice||0)*(p.quantity||0);
+    const pnl  = val - cost;
+    const base = isUsd ? usTotal : krBase;
+    return isUsd
+      ? [p.symbol, p.name||"", p.type==="ETF"?"ETF":"EQUITY", n(p.quantity), n(p.avgPrice), n(p.currentPrice), +val.toFixed(2)||"", +pnl.toFixed(2)||"", cost>0?(pnl/cost*100).toFixed(2):"", pct(val, base)]
+      : [p.symbol, p.name||"", n(p.quantity), n(p.avgPrice), n(p.currentPrice), Math.round(val)||"", Math.round(pnl)||"", cost>0?(pnl/cost*100).toFixed(2):"", pct(val, base)];
+  };
+
+  const krData   = [["종목코드","종목명","보유수량","평균매입가(원)","현재가(원)","평가금액(원)","손익(원)","수익률(%)","원화자산비중(%)"], ...krItems.map(p => makeRow(p, false))];
+  const usData   = [["티커","종목명","종류","보유수량","평균매입가($)","현재가($)","평가금액($)","손익($)","수익률(%)","달러자산비중(%)"], ...usItems.map(p => makeRow(p, true))];
+  const fundData = [["펀드코드","펀드명","보유좌수","평균매입가(원)","기준가(원)","평가금액(원)","손익(원)","수익률(%)","원화자산비중(%)"], ...fundItems.map(p => makeRow(p, false))];
+  const now = new Date().toLocaleString("ko-KR");
+  const summaryData = [
+    ["항목","평가금액","비중"],
+    ["한국주식 (원화)", Math.round(krTotal), pct(krTotal, krBase)+"%"],
+    ["ISA펀드 (원화)",  Math.round(fundTotal), pct(fundTotal, krBase)+"%"],
+    ["원화 자산 합계",  Math.round(krBase),    "100%"],
+    [],
+    ["미국주식/ETF (달러)", +usTotal.toFixed(2), "100% (USD)"],
+    [],
+    ["마지막 업데이트", now, ""],
+  ];
+
+  try {
+    await Promise.all([SHEET.KR, SHEET.US, SHEET.FUND, SHEET.SUMMARY].map(s =>
+      sheets.spreadsheets.values.clear({ spreadsheetId: SHEET_ID, range: `${s}!A:Z` })
+    ));
+    await Promise.all([
+      sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `${SHEET.KR}!A1`,      valueInputOption: "RAW", requestBody: { values: krData } }),
+      sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `${SHEET.US}!A1`,      valueInputOption: "RAW", requestBody: { values: usData } }),
+      sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `${SHEET.FUND}!A1`,    valueInputOption: "RAW", requestBody: { values: fundData } }),
+      sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `${SHEET.SUMMARY}!A1`, valueInputOption: "RAW", requestBody: { values: summaryData } }),
+    ]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Sheets save error:", e.message);
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

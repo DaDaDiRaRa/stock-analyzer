@@ -104,6 +104,8 @@ GCP 배포를 위해 레포 Settings → Secrets에 필요:
 - `ALPHA_VANTAGE_API_KEY`
 - `DART_API_KEY`
 - `NEWS_API_KEY`
+- `GOOGLE_SHEET_ID`
+- `GOOGLE_SERVICE_ACCOUNT_KEY` (서비스 계정 JSON을 base64 인코딩한 값)
 
 ## GCP 인프라
 
