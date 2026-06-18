@@ -439,6 +439,146 @@ app.get("/api/news", async (req, res) => {
   res.json(items);
 });
 
+// ====== 외부 데이터 수집 (Finnhub / Alpha Vantage / DART / NewsAPI) ======
+
+const dartCorpCodeCache = {};
+
+async function getDartCorpCode(krCode) {
+  if (dartCorpCodeCache[krCode]) return dartCorpCodeCache[krCode];
+  const key = process.env.DART_API_KEY;
+  if (!key || key === "your_dart_api_key_here") return null;
+  try {
+    const r = await axios.get("https://opendart.fss.or.kr/api/company.json", {
+      params: { crtfc_key: key, stock_code: krCode },
+      timeout: 8000,
+    });
+    if (r.data?.status === "000" && r.data?.corp_code) {
+      dartCorpCodeCache[krCode] = r.data.corp_code;
+      return r.data.corp_code;
+    }
+    return null;
+  } catch { return null; }
+}
+
+async function fetchDartDisclosures(symbol, days = 30) {
+  const key = process.env.DART_API_KEY;
+  if (!key || key === "your_dart_api_key_here") return [];
+  const krCode = symbol.replace(/\.(KS|KQ)$/i, "");
+  const corpCode = await getDartCorpCode(krCode);
+  if (!corpCode) return [];
+  const bgn = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10).replace(/-/g, "");
+  try {
+    const r = await axios.get("https://opendart.fss.or.kr/api/list.json", {
+      params: { crtfc_key: key, corp_code: corpCode, bgn_de: bgn, sort: "date", sort_mth: "desc", page_count: 10 },
+      timeout: 8000,
+    });
+    if (r.data?.status !== "000") return [];
+    return (r.data.list || []).slice(0, 5).map(d => ({
+      title: d.report_nm,
+      pubDate: d.rcept_dt,
+      link: `https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${d.rcept_no}`,
+    }));
+  } catch (err) {
+    console.error("DART 공시 실패:", err.message);
+    return [];
+  }
+}
+
+async function fetchFinnhubNews(symbol, days = 14) {
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key || key === "your_finnhub_api_key_here") return [];
+  const to = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  try {
+    const r = await axios.get("https://finnhub.io/api/v1/company-news", {
+      params: { symbol, from, to, token: key },
+      timeout: 8000,
+    });
+    return (r.data || []).slice(0, 5).map(n => ({
+      title: n.headline,
+      link: n.url,
+      pubDate: new Date(n.datetime * 1000).toISOString(),
+      source: n.source,
+    }));
+  } catch (err) {
+    console.error("Finnhub 뉴스 실패:", err.message);
+    return [];
+  }
+}
+
+async function fetchAlphaVantageSentimentBatch(tickers) {
+  const key = process.env.ALPHA_VANTAGE_API_KEY;
+  if (!key || key === "your_alpha_vantage_api_key_here" || !tickers.length) return {};
+  try {
+    const r = await axios.get("https://www.alphavantage.co/query", {
+      params: { function: "NEWS_SENTIMENT", tickers: tickers.join(","), limit: 50, apikey: key },
+      timeout: 15000,
+    });
+    const feed = r.data?.feed;
+    if (!feed?.length) return {};
+    const result = {};
+    tickers.forEach(ticker => {
+      let bullish = 0, bearish = 0, neutral = 0;
+      feed.forEach(item => {
+        const ts = item.ticker_sentiment?.find(t => t.ticker === ticker);
+        if (!ts) return;
+        const label = ts.ticker_sentiment_label || "";
+        if (label.includes("Bullish")) bullish++;
+        else if (label.includes("Bearish")) bearish++;
+        else neutral++;
+      });
+      const total = bullish + bearish + neutral;
+      if (total > 0) result[ticker] = {
+        bullishPct: Math.round((bullish / total) * 100),
+        bearishPct: Math.round((bearish / total) * 100),
+        neutralPct: Math.round((neutral / total) * 100),
+        sampleSize: total,
+      };
+    });
+    return result;
+  } catch (err) {
+    console.error("Alpha Vantage 감성 실패:", err.message);
+    return {};
+  }
+}
+
+async function fetchNewsApiKo(query, days = 14) {
+  const key = process.env.NEWS_API_KEY;
+  if (!key || key === "your_newsapi_key_here") return [];
+  const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  try {
+    const r = await axios.get("https://newsapi.org/v2/everything", {
+      params: { q: query, language: "ko", from, sortBy: "publishedAt", pageSize: 5, apiKey: key },
+      timeout: 8000,
+    });
+    return (r.data?.articles || []).map(a => ({
+      title: a.title,
+      link: a.url,
+      pubDate: a.publishedAt,
+      source: a.source?.name,
+    }));
+  } catch (err) {
+    console.error("NewsAPI 실패:", err.message);
+    return [];
+  }
+}
+
+async function fetchFundHoldings(fundCode) {
+  try {
+    const r = await axios.get("https://m.stock.naver.com/front-api/fund/portfolio", {
+      params: { fundCode, portfolioType: "stock" },
+      headers: NAVER_FUND_HEADERS,
+      timeout: 8000,
+    });
+    const items = r.data?.result?.portfolioList || r.data?.result || r.data?.portfolioList || [];
+    return (Array.isArray(items) ? items : []).slice(0, 10).map(h => ({
+      name: h.itemName || h.name || h.stockName,
+      code: h.itemCode || h.code || h.stockCode,
+      weight: h.weight || h.holdingRatio || h.ratio,
+    })).filter(h => h.name);
+  } catch { return []; }
+}
+
 app.post("/api/analyze", async (req, res) => {
   try {
     const { portfolio, marketData } = req.body;
@@ -446,52 +586,150 @@ app.post("/api/analyze", async (req, res) => {
       return res.status(400).json({ error: "API 키가 설정되지 않았습니다. .env 파일에 ANTHROPIC_API_KEY를 입력해주세요." });
     }
 
-    // 종목별 최신 뉴스 병렬 수집 (종목당 3개)
-    const newsResults = await Promise.allSettled(
-      portfolio.map(p => fetchNaverNews(p.name, 3))
-    );
-    const newsMap = {};
-    portfolio.forEach((p, i) => {
-      newsMap[p.symbol] = newsResults[i].status === "fulfilled" ? newsResults[i].value : [];
+    const usStocks = portfolio.filter(p => p.country === "US");
+    const krStocks = portfolio.filter(p => p.country === "KR" && p.type !== "FUND");
+    const funds    = portfolio.filter(p => p.type === "FUND");
+
+    // 모든 데이터 병렬 수집
+    const [sentimentResult, usNewsResult, krDataResult, fundDataResult] = await Promise.allSettled([
+      fetchAlphaVantageSentimentBatch(usStocks.map(p => p.symbol)),
+      Promise.allSettled(usStocks.map(p => fetchFinnhubNews(p.symbol))),
+      Promise.allSettled(krStocks.map(p => Promise.allSettled([
+        fetchDartDisclosures(p.symbol),
+        fetchNewsApiKo(p.name),
+        fetchNaverNews(p.name, 3),
+      ]))),
+      Promise.allSettled(funds.map(p => Promise.allSettled([
+        fetchNaverNews(p.name, 3),
+        fetchFundHoldings(p.symbol),
+      ]))),
+    ]);
+
+    const sentiments  = sentimentResult.status  === "fulfilled" ? sentimentResult.value  : {};
+    const usNewsArr   = usNewsResult.status      === "fulfilled" ? usNewsResult.value     : [];
+    const krDataArr   = krDataResult.status      === "fulfilled" ? krDataResult.value     : [];
+    const fundDataArr = fundDataResult.status    === "fulfilled" ? fundDataResult.value   : [];
+
+    const dataMap = {};
+
+    usStocks.forEach((p, i) => {
+      dataMap[p.symbol] = {
+        news: usNewsArr[i]?.status === "fulfilled" ? usNewsArr[i].value : [],
+        sentiment: sentiments[p.symbol] || null,
+        disclosures: [],
+        holdings: [],
+      };
     });
 
+    krStocks.forEach((p, i) => {
+      const r = krDataArr[i];
+      const [dartR, newsApiR, naverR] = r?.status === "fulfilled" ? r.value : [];
+      dataMap[p.symbol] = {
+        news: [
+          ...(newsApiR?.status === "fulfilled" ? newsApiR.value : []),
+          ...(naverR?.status  === "fulfilled" ? naverR.value  : []),
+        ].slice(0, 6),
+        sentiment: null,
+        disclosures: dartR?.status === "fulfilled" ? dartR.value : [],
+        holdings: [],
+      };
+    });
+
+    funds.forEach((p, i) => {
+      const r = fundDataArr[i];
+      const [naverR, holdingsR] = r?.status === "fulfilled" ? r.value : [];
+      dataMap[p.symbol] = {
+        news: naverR?.status     === "fulfilled" ? naverR.value    : [],
+        sentiment: null,
+        disclosures: [],
+        holdings: holdingsR?.status === "fulfilled" ? holdingsR.value : [],
+      };
+    });
+
+    // 프론트엔드 호환용 newsMap
+    const newsMap = {};
+    portfolio.forEach(p => { newsMap[p.symbol] = dataMap[p.symbol]?.news || []; });
+
+    // 포트폴리오 텍스트 생성
     const pText = portfolio.map(p => {
-      const val = p.currentPrice * p.quantity, cost = p.avgPrice * p.quantity;
-      const pnl = val - cost, pct = cost > 0 ? ((pnl/cost)*100).toFixed(2) : "N/A";
-      const news = newsMap[p.symbol];
-      const newsText = news.length
-        ? "\n  최신 뉴스:\n" + news.map(n => `  · [${n.pubDate?.slice(0,16)}] ${n.title}`).join("\n")
-        : "";
-      return `- ${p.name}(${p.symbol}): ${p.quantity}주, 매수가 ${p.avgPrice}, 현재 ${p.currentPrice}, 평가 ${val.toLocaleString()}, 손익 ${pnl>=0?"+":""}${pnl.toFixed(0)}(${pct}%), 일등락 ${p.changePercent?.toFixed(2)}%${newsText}`;
+      const d = dataMap[p.symbol] || {};
+      const val  = (p.currentPrice || 0) * (p.quantity || 0);
+      const cost = (p.avgPrice    || 0) * (p.quantity || 0);
+      const pnl  = val - cost;
+      const pct  = cost > 0 ? ((pnl / cost) * 100).toFixed(2) : "N/A";
+
+      let lines = `### ${p.name} (${p.symbol})`;
+      lines += `\n- 수량: ${p.quantity}주 / 매수가: ${p.avgPrice} / 현재가: ${p.currentPrice}`;
+      lines += `\n- 평가: ${val.toLocaleString()} / 손익: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(0)} (${pct}%) / 일등락: ${p.changePercent?.toFixed(2) ?? "N/A"}%`;
+
+      if (d.sentiment) {
+        lines += `\n- 시장 감성 (${d.sentiment.sampleSize}건): 강세 ${d.sentiment.bullishPct}% / 약세 ${d.sentiment.bearishPct}% / 중립 ${d.sentiment.neutralPct}%`;
+      }
+      if (d.disclosures?.length) {
+        lines += "\n- 최근 공시:\n" + d.disclosures.map(dc => `  · [${dc.pubDate}] ${dc.title}`).join("\n");
+      }
+      if (d.news?.length) {
+        lines += "\n- 최신 뉴스:\n" + d.news.map(n =>
+          `  · [${(n.pubDate || "").slice(0, 10)}] ${n.title}${n.source ? ` (${n.source})` : ""}`
+        ).join("\n");
+      }
+      if (d.holdings?.length) {
+        lines += "\n- 주요 편입 종목: " + d.holdings.map(h =>
+          `${h.name}${h.weight ? `(${h.weight}%)` : ""}`
+        ).join(", ");
+      }
+      return lines;
     }).join("\n\n");
 
-    const mText = marketData.map(m => `- ${m.name}: ${m.price?.toLocaleString("en-US",{minimumFractionDigits:2})} (${m.changePercent>=0?"+":""}${m.changePercent?.toFixed(2)}%)`).join("\n");
-    const tv = portfolio.reduce((s,p) => s+p.currentPrice*p.quantity,0);
-    const tc = portfolio.reduce((s,p) => s+p.avgPrice*p.quantity,0);
-    const tp = tv-tc, tpp = tc>0?((tp/tc)*100).toFixed(2):"N/A";
+    const mText = marketData.map(m =>
+      `- ${m.name}: ${m.price?.toLocaleString("en-US", { minimumFractionDigits: 2 })} (${m.changePercent >= 0 ? "+" : ""}${m.changePercent?.toFixed(2)}%)`
+    ).join("\n");
 
-    const hasNews = Object.values(newsMap).some(n => n.length > 0);
+    const tv  = portfolio.reduce((s, p) => s + (p.currentPrice || 0) * (p.quantity || 0), 0);
+    const tc  = portfolio.reduce((s, p) => s + (p.avgPrice    || 0) * (p.quantity || 0), 0);
+    const tp  = tv - tc;
+    const tpp = tc > 0 ? ((tp / tc) * 100).toFixed(2) : "N/A";
 
-    const prompt = `당신은 전문 주식 투자 분석가입니다. 포트폴리오, 시장 현황${hasNews ? ", 최신 뉴스" : ""}를 종합 분석하고 투자 의견을 제공하세요.
+    const prompt = `당신은 전문 포트폴리오 분석가입니다. 아래 데이터(포트폴리오 현황, 시장 감성 점수, 최근 공시, 뉴스)를 종합해 투자 전망을 분석해주세요.
 
-## 포트폴리오
-총 평가: ${tv.toLocaleString()} / 원금: ${tc.toLocaleString()} / 손익: ${tp>=0?"+":""}${tp.toLocaleString()} (${tpp}%)
+## 포트폴리오 현황
+총 평가: ${tv.toLocaleString()} / 원금: ${tc.toLocaleString()} / 총 손익: ${tp >= 0 ? "+" : ""}${tp.toLocaleString()} (${tpp}%)
 
 ${pText}
 
 ## 시장 지수
 ${mText}
 
-## 요청
-1. **포트폴리오 종합 평가**: 구성, 다각화, 리스크
-2. **개별 종목 분석**: 현황과 단기/중기 전망${hasNews ? " (뉴스 반영)" : ""}
-3. **시장 상황**: 글로벌/국내 흐름
-4. **리스크 요인 및 대응**
-5. **투자 전략 제언**
+## 분석 요청
 
-한국어로, 마크다운 형식으로 실용적으로 답변해주세요.`;
+### 1. 포트폴리오 종합 평가
+- 구성 및 다각화 수준, 업종/지역 편중 리스크
 
-    const msg = await anthropic.messages.create({ model: "claude-sonnet-4-6", max_tokens: 2500, messages: [{ role: "user", content: prompt }] });
+### 2. 종목별 분석 및 전망
+각 종목에 대해:
+- 현재 상황 (뉴스·공시·감성 점수 반영)
+- **3개월 전망**: 단기 모멘텀과 주요 이벤트
+- **6개월 시나리오**:
+  - 🟢 낙관: 조건과 방향
+  - 🟡 기본: 컨센서스 방향
+  - 🔴 비관: 하락 리스크
+
+### 3. 시장 환경 분석
+금리·환율·매크로 변수가 포트폴리오에 미치는 영향
+
+### 4. 리스크 관리
+상위 리스크 3가지와 대응 전략
+
+### 5. 투자 전략 제언
+비중 조절, 매수/매도 타이밍 의견
+
+한국어, 마크다운 형식으로 답변해주세요.`;
+
+    const msg = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 4000,
+      messages: [{ role: "user", content: prompt }],
+    });
     res.json({ analysis: msg.content[0].text, newsMap });
   } catch (err) {
     res.status(500).json({ error: "AI 분석 실패: " + err.message });
