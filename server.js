@@ -243,13 +243,26 @@ const NAVER_FUND_HEADERS = {
   "Accept": "application/json",
 };
 
-// 펀드 검색 (네이버 자동완성 API)
+// 펀드 검색 (네이버 자동완성 API + 코드 직접 조회)
 app.get("/api/fund/search", async (req, res) => {
   const { q } = req.query;
   if (!q || q.trim().length < 1) return res.json([]);
+  const query = q.trim();
   try {
+    // 펀드 코드 형식(K55...)이면 직접 조회
+    if (/^K55[0-9A-Z]+$/i.test(query)) {
+      const r = await axios.get("https://m.stock.naver.com/front-api/fund/detail", {
+        params: { fundCode: query },
+        headers: NAVER_FUND_HEADERS,
+        timeout: 8000,
+      });
+      const d = r.data?.result;
+      if (d?.fundName) {
+        return res.json([{ code: query, name: d.fundName, type: "FUND", exchange: "펀드", country: "KR" }]);
+      }
+    }
     const r = await axios.get("https://ac.stock.naver.com/ac", {
-      params: { q: q.trim(), target: "fund" },
+      params: { q: query, target: "fund" },
       headers: NAVER_FUND_HEADERS,
       timeout: 8000,
     });
